@@ -3,98 +3,118 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Face Beautify with OpenCV.js</title>
-    <script src="js/opencv.js" onload="onOpenCvReady();"></script>
-    <style>
-        body { font-family: Arial, sans-serif; text-align: center; margin: 20px; }
-        input { margin-bottom: 20px; }
-        .container {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 20px;
-        }
-        canvas {
-            width: 45%;
-            border: 1px solid #ccc;
-        }
-    </style>
+    <title>Smile Detection with OpenCV.js</title>
 </head>
 <body>
+    <h2>Upload an Image to Detect Smiles</h2>
+    <input type="file" id="fileInput" accept="image/*">
+    <canvas id="canvasOutput"></canvas>
+    <p id="status">Loading OpenCV.js...</p>
 
-    <h2>Face Beautify with OpenCV.js</h2>
-    <input type="file" id="upload" accept="image/*">
-    <br>
-    <div class="container">
-        <canvas id="canvas-original"></canvas>
-        <canvas id="canvas-processed"></canvas>
-    </div>
+    <!-- Load OpenCV.js -->
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvLoaded()"></script>
 
     <script>
-        let img = new Image();
-        let canvasOriginal = document.getElementById("canvas-original");
-        let ctxOriginal = canvasOriginal.getContext("2d");
-        let canvasProcessed = document.getElementById("canvas-processed");
-        let ctxProcessed = canvasProcessed.getContext("2d");
+        let faceCascade, smileCascade;
+        let isOpenCVReady = false;
 
-        function onOpenCvReady() {
-            console.log("✅ OpenCV.js is fully loaded!");
+        function onOpenCvLoaded() {
+            console.log("✅ OpenCV.js is loaded!");
+            document.getElementById("status").innerText = "Initializing OpenCV...", cv;
+
+            cv['onRuntimeInitialized'] = function () {
+                console.log("✅ OpenCV runtime initialized!");
+                faceCascade = new cv.CascadeClassifier();
+                smileCascade = new cv.CascadeClassifier();
+
+                let faceCascadeFile = "haarcascade_frontalface_default.xml";
+                let smileCascadeFile = "haarcascade_smile.xml";
+
+                let loadedFiles = 0;
+                function checkAllFilesLoaded() {
+                    loadedFiles++;
+                    if (loadedFiles === 2) {
+                        isOpenCVReady = true;
+                        document.getElementById("status").innerText = "OpenCV is Ready! Upload an image.";
+                        console.log("✅ All cascade files loaded. Ready to detect!");
+                    }
+                }
+
+                loadCascadeFile(faceCascadeFile, faceCascade, checkAllFilesLoaded);
+                loadCascadeFile(smileCascadeFile, smileCascade, checkAllFilesLoaded);
+            };
         }
 
-        document.getElementById("upload").addEventListener("change", function(event) {
-            let file = event.target.files[0];
-            if (file) {
-                let reader = new FileReader();
-                reader.onload = function(e) {
-                    img.src = e.target.result;
-                };
-                reader.readAsDataURL(file);
+        function loadCascadeFile(fileName, cascade, callback) {
+            let utils = new cv.Utils();
+            utils.createFileFromUrl(fileName, fileName, function () {
+                cascade.load(fileName);
+                console.log(`✅ Loaded: ${fileName}`);
+                callback();
+            });
+        }
+
+        document.getElementById('fileInput').addEventListener('change', (event) => {
+            if (!isOpenCVReady) {
+                alert("OpenCV is still loading. Please wait...");
+                return;
             }
+
+            let file = event.target.files[0];
+            if (!file) return;
+
+            let img = new Image();
+            img.src = URL.createObjectURL(file);
+            img.onload = function () {
+                let canvas = document.getElementById('canvasOutput');
+                let ctx = canvas.getContext('2d');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0, img.width, img.height);
+
+                let src = cv.imread(canvas);
+                let gray = new cv.Mat();
+                cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+
+                let faces = new cv.RectVector();
+                let smiles = new cv.RectVector();
+
+                faceCascade.detectMultiScale(gray, faces, 1.1, 3, 0);
+                console.log(`🟢 Detected Faces: ${faces.size()}`);
+
+                for (let i = 0; i < faces.size(); ++i) {
+                    let roiGray = gray.roi(faces.get(i));
+                    smileCascade.detectMultiScale(roiGray, smiles, 1.8, 50, 0);
+                    
+                    console.log(`🟢 Detected Smiles: ${smiles.size()}`);
+
+                    for (let j = 0; j < smiles.size(); ++j) {
+                        let smile = smiles.get(j);
+                        let smileRatio = (smile.width * smile.height) / (faces.get(i).width * faces.get(i).height);
+                        let smileIntensity = Math.min(100, Math.round(smileRatio * 500));
+
+                        let smileCategory = "No Smile";
+                        if (smileIntensity > 20) smileCategory = "Mild Smile";
+                        if (smileIntensity > 40) smileCategory = "Grin";
+                        if (smileIntensity > 60) smileCategory = "Big Smile";
+                        if (smileIntensity > 80) smileCategory = "Laughing";
+
+                        console.log(`😀 Smile Intensity: ${smileIntensity}% - ${smileCategory}`);
+
+                        ctx.strokeStyle = "blue";
+                        ctx.lineWidth = 2;
+                        ctx.strokeRect(faces.get(i).x + smile.x, faces.get(i).y + smile.y, smile.width, smile.height);
+                    }
+                    roiGray.delete();
+                }
+
+                src.delete();
+                gray.delete();
+                faces.delete();
+                smiles.delete();
+            };
         });
 
-        img.onload = function() {
-            canvasOriginal.width = canvasProcessed.width = img.width / 2;
-            canvasOriginal.height = canvasProcessed.height = img.height / 2;
-            ctxOriginal.drawImage(img, 0, 0, canvasOriginal.width, canvasOriginal.height);
-
-            if (typeof cv !== 'undefined' && cv.imread) {
-                processImage();
-            } else {
-                console.log("⏳ Waiting for OpenCV.js...");
-                setTimeout(processImage, 500);
-            }
-        };
-
-        function processImage() {
-            let src = cv.imread(canvasOriginal);
-            let dst = new cv.Mat();
-            cv.cvtColor(src, dst, cv.COLOR_RGBA2RGB);
-
-            let smooth = new cv.Mat();
-            cv.bilateralFilter(dst, smooth, 10, 50, 50, cv.BORDER_DEFAULT);
-
-            let lab = new cv.Mat();
-            cv.cvtColor(smooth, lab, cv.COLOR_RGB2Lab);
-            
-            let labChannels = new cv.MatVector();
-            cv.split(lab, labChannels);
-
-            let lChannel = labChannels.get(0);
-            lChannel.convertTo(lChannel, -1, 1.05, 5);
-
-            labChannels.set(0, lChannel);
-            cv.merge(labChannels, lab);
-            cv.cvtColor(lab, smooth, cv.COLOR_Lab2RGB);
-
-            let finalOutput = new cv.Mat();
-            cv.addWeighted(smooth, 0.7, dst, 0.3, 0, finalOutput);
-
-            cv.imshow("canvas-processed", finalOutput);
-
-            src.delete(); dst.delete(); smooth.delete(); lab.delete(); labChannels.delete();
-            lChannel.delete(); finalOutput.delete();
-        }
     </script>
-
 </body>
 </html>
